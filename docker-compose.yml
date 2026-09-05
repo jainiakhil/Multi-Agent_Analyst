@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  analyst-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: analyst_api_service
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - SUPERVISOR_MODEL=llama3.1:8b
+      - CODE_ANALYST_MODEL=qwen2.5-coder:7b
+      - DOC_PARSER_MODEL=llama3.1:8b
+      - EMBEDDING_MODEL=nomic-embed-text
+      - CHROMA_PERSIST_DIR=/app/data/chroma
+      - CHECKPOINT_DB_PATH=/app/data/checkpoints.db
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
