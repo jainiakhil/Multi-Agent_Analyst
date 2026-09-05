@@ -1,39 +1,41 @@
 """Agent node implementations for Supervisor, Code Analyst, and Doc Parser.
 
-Defines the multi-agent worker nodes with automated tool calling loops and
-the Lead Supervisor with structured routing output.
+Defines the multi-agent worker nodes with automated tool calling loops,
+dynamic LLM model resolution, and the Lead Supervisor with structured routing output.
 """
 
 import logging
+from typing import Optional
 from langchain_core.messages import SystemMessage, AIMessage, ToolMessage
-from langchain_ollama import ChatOllama
+from langchain_core.runnables import RunnableConfig
 
 from app.core.config import settings
+from app.core.llm_factory import llm_factory
 from app.graph.state import AgentState, RouterOutput
 from app.graph.tools import parse_python_ast, query_documentation
 
 logger = logging.getLogger(__name__)
 
-# Model Instances configured from application settings
-supervisor_llm = ChatOllama(
-    model=settings.SUPERVISOR_MODEL,
-    base_url=settings.OLLAMA_BASE_URL,
+# Baseline default model instances resolved via LLMFactory
+supervisor_llm = llm_factory.create_chat_model(
+    model_name=settings.SUPERVISOR_MODEL,
+    provider=settings.LLM_PROVIDER,
     temperature=0.0,
 )
 
-code_llm = ChatOllama(
-    model=settings.CODE_ANALYST_MODEL,
-    base_url=settings.OLLAMA_BASE_URL,
+code_llm = llm_factory.create_chat_model(
+    model_name=settings.CODE_ANALYST_MODEL,
+    provider=settings.LLM_PROVIDER,
     temperature=0.1,
 )
 
-doc_llm = ChatOllama(
-    model=settings.DOC_PARSER_MODEL,
-    base_url=settings.OLLAMA_BASE_URL,
+doc_llm = llm_factory.create_chat_model(
+    model_name=settings.DOC_PARSER_MODEL,
+    provider=settings.LLM_PROVIDER,
     temperature=0.1,
 )
 
-# Bind tools to specific agents
+# Bind tools to default agents
 code_agent_with_tools = code_llm.bind_tools([parse_python_ast])
 doc_agent_with_tools = doc_llm.bind_tools([query_documentation])
 router_chain = supervisor_llm.with_structured_output(RouterOutput)
@@ -44,11 +46,12 @@ TOOL_MAP = {
 }
 
 
-def supervisor_node(state: AgentState) -> dict:
+def supervisor_node(state: AgentState, config: Optional[RunnableConfig] = None) -> dict:
     """Orchestrates control flow by evaluating context and choosing worker routes.
 
     Args:
         state: Current AgentState containing conversation history and previous actions.
+        config: Optional LangGraph runtime execution configuration with model overrides.
 
     Returns:
         Dictionary update with `next_node` set to 'code_analyst', 'doc_parser', or 'FINISH'.
@@ -64,9 +67,24 @@ def supervisor_node(state: AgentState) -> dict:
         )
     )
 
+    configurable = (config or {}).get("configurable", {})
+    custom_model = configurable.get("supervisor_model")
+    custom_provider = configurable.get("provider")
+
+    # Resolve active router chain (custom override or default)
+    if custom_model or custom_provider:
+        active_llm = llm_factory.create_chat_model(
+            model_name=custom_model,
+            provider=custom_provider,
+            temperature=0.0,
+        )
+        active_router = active_llm.with_structured_output(RouterOutput)
+    else:
+        active_router = router_chain
+
     try:
         messages = [system_prompt] + list(state["messages"])
-        decision = router_chain.invoke(messages)
+        decision = active_router.invoke(messages)
         logger.info(f"Supervisor routed to: {decision.next_node} (Reason: {decision.reasoning})")
         return {"next_node": decision.next_node}
     except Exception as exc:
@@ -75,11 +93,12 @@ def supervisor_node(state: AgentState) -> dict:
         return {"next_node": "FINISH"}
 
 
-def code_analyst_node(state: AgentState) -> dict:
-    """Processes technical code analysis requests using qwen2.5-coder with AST tool execution.
+def code_analyst_node(state: AgentState, config: Optional[RunnableConfig] = None) -> dict:
+    """Processes technical code analysis requests using AST tool execution.
 
     Args:
         state: Current AgentState containing conversation history.
+        config: Optional LangGraph runtime execution configuration with model overrides.
 
     Returns:
         Dictionary update with an AIMessage from [Code Analyst].
@@ -92,9 +111,23 @@ def code_analyst_node(state: AgentState) -> dict:
         )
     )
 
+    configurable = (config or {}).get("configurable", {})
+    custom_model = configurable.get("code_analyst_model") or configurable.get("code_model")
+    custom_provider = configurable.get("provider")
+
+    if custom_model or custom_provider:
+        active_llm = llm_factory.create_chat_model(
+            model_name=custom_model,
+            provider=custom_provider,
+            temperature=0.1,
+        )
+        active_agent = active_llm.bind_tools([parse_python_ast])
+    else:
+        active_agent = code_agent_with_tools
+
     try:
         history = [system_prompt] + list(state["messages"])
-        response = code_agent_with_tools.invoke(history)
+        response = active_agent.invoke(history)
 
         # Handle tool call execution loop if the model decided to inspect AST
         if response.tool_calls:
@@ -114,7 +147,7 @@ def code_analyst_node(state: AgentState) -> dict:
                 tool_messages.append(ToolMessage(content=str(tool_result), tool_call_id=tool_id))
 
             # Re-invoke model with tool execution results for final synthesis
-            final_response = code_agent_with_tools.invoke(history + [response] + tool_messages)
+            final_response = active_agent.invoke(history + [response] + tool_messages)
             content = final_response.content
         else:
             content = response.content
@@ -125,11 +158,12 @@ def code_analyst_node(state: AgentState) -> dict:
         return {"messages": [AIMessage(content=f"[Code Analyst Error]: Failed to analyze code: {str(exc)}")]}
 
 
-def doc_parser_node(state: AgentState) -> dict:
+def doc_parser_node(state: AgentState, config: Optional[RunnableConfig] = None) -> dict:
     """Processes document queries using local vector RAG search with query tool execution.
 
     Args:
         state: Current AgentState containing conversation history.
+        config: Optional LangGraph runtime execution configuration with model overrides.
 
     Returns:
         Dictionary update with an AIMessage from [Doc Parser].
@@ -142,9 +176,23 @@ def doc_parser_node(state: AgentState) -> dict:
         )
     )
 
+    configurable = (config or {}).get("configurable", {})
+    custom_model = configurable.get("doc_parser_model") or configurable.get("doc_model")
+    custom_provider = configurable.get("provider")
+
+    if custom_model or custom_provider:
+        active_llm = llm_factory.create_chat_model(
+            model_name=custom_model,
+            provider=custom_provider,
+            temperature=0.1,
+        )
+        active_agent = active_llm.bind_tools([query_documentation])
+    else:
+        active_agent = doc_agent_with_tools
+
     try:
         history = [system_prompt] + list(state["messages"])
-        response = doc_agent_with_tools.invoke(history)
+        response = active_agent.invoke(history)
 
         # Handle tool call execution loop if the model requested documentation retrieval
         if response.tool_calls:
@@ -164,7 +212,7 @@ def doc_parser_node(state: AgentState) -> dict:
                 tool_messages.append(ToolMessage(content=str(tool_result), tool_call_id=tool_id))
 
             # Re-invoke model with retrieved excerpts for grounded answer
-            final_response = doc_agent_with_tools.invoke(history + [response] + tool_messages)
+            final_response = active_agent.invoke(history + [response] + tool_messages)
             content = final_response.content
         else:
             content = response.content

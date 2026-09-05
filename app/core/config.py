@@ -28,10 +28,15 @@ class Settings(BaseSettings):
     OLLAMA_BASE_URL: str = "http://localhost:11434"
 
     # LLM & Embedding Model Identifiers
+    LLM_PROVIDER: str = "ollama"  # "ollama" or "openai_compatible"
     SUPERVISOR_MODEL: str = "llama3.1:8b"
     CODE_ANALYST_MODEL: str = "qwen2.5-coder:7b"
     DOC_PARSER_MODEL: str = "llama3.1:8b"
     EMBEDDING_MODEL: str = "nomic-embed-text"
+
+    # OpenAI-Compatible Provider Configuration (vLLM, LMStudio, OpenAI, Groq, etc.)
+    OPENAI_API_BASE: str | None = None
+    OPENAI_API_KEY: str | None = None
 
     # Data Persistence Paths
     CHROMA_PERSIST_DIR: str = "./data/chroma"

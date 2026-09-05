@@ -214,11 +214,68 @@ Response:
   "status": "healthy",
   "version": "1.0.0",
   "ollama_base_url": "http://localhost:11434",
+  "provider": "ollama",
   "supervisor_model": "llama3.1:8b",
   "code_analyst_model": "qwen2.5-coder:7b",
   "doc_parser_model": "llama3.1:8b",
   "embedding_model": "nomic-embed-text"
 }
+```
+
+---
+
+## 🔄 Switching LLM Models & Providers
+
+The system provides complete flexibility to switch models at three different levels without modifying source code:
+
+### 1. Environment / Configuration (`.env`)
+Set the default models and provider in your `.env` file:
+```ini
+LLM_PROVIDER=ollama
+SUPERVISOR_MODEL=llama3.1:8b
+CODE_ANALYST_MODEL=qwen2.5-coder:7b
+DOC_PARSER_MODEL=llama3.1:8b
+EMBEDDING_MODEL=nomic-embed-text
+```
+
+### 2. Runtime Dynamic Model Switching (REST API)
+Switch models and providers on the running server on the fly without restarting:
+
+- **List active models & discover local Ollama models**:
+  ```bash
+  curl -X GET "http://localhost:8000/api/v1/models"
+  ```
+
+- **Switch active models at runtime**:
+  ```bash
+  curl -X POST "http://localhost:8000/api/v1/models/switch" \
+       -H "Content-Type: application/json" \
+       -d '{
+         "supervisor_model": "mistral:7b",
+         "code_analyst_model": "qwen2.5-coder:14b"
+       }'
+  ```
+
+### 3. Per-Request Model Overrides
+Override models on demand in individual requests (`POST /api/v1/analyze` or `WebSocket /ws/analyze`):
+```json
+{
+  "query": "Review tests/sample_code.py for syntax and structure.",
+  "thread_id": "custom_session",
+  "target_file": "tests/sample_code.py",
+  "supervisor_model": "llama3.2:3b",
+  "code_analyst_model": "qwen2.5-coder:14b"
+}
+```
+
+### 4. Using OpenAI-Compatible Providers (vLLM, LMStudio, OpenRouter, Groq, OpenAI)
+To use any OpenAI-compatible inference server, configure `.env`:
+```ini
+LLM_PROVIDER=openai_compatible
+OPENAI_API_BASE=http://localhost:1234/v1   # LMStudio, vLLM, or provider URL
+OPENAI_API_KEY=your-api-key-if-needed
+SUPERVISOR_MODEL=gpt-4o
+CODE_ANALYST_MODEL=gpt-4o-mini
 ```
 
 ### 1. Ingest Documentation (PDF / TXT / MD)
