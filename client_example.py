@@ -22,7 +22,7 @@ async def run_demo():
     print("\n[1/3] Checking API Server Health...")
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = client.get(f"{api_base}/health")
+            resp = await client.get(f"{api_base}/health")
             if resp.status_code == 200:
                 print(f"  [OK] API is healthy! Details: {resp.json()}")
             else:
@@ -37,7 +37,7 @@ async def run_demo():
     print("\n[2/3] Checking Active Models...")
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            models_resp = client.get(f"{api_base}/api/v1/models")
+            models_resp = await client.get(f"{api_base}/api/v1/models")
             print(f"  Active configuration: {models_resp.json()}")
     except Exception as exc:
         print(f"  [WARNING] Could not fetch models list: {exc}")
