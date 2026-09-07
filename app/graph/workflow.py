@@ -34,16 +34,10 @@ def route_next(state: AgentState) -> Literal["code_analyst", "doc_parser", "__en
 
 
 def create_checkpointer():
-    """Initializes persistent SQLite checkpointer with multi-thread safety."""
+    """Initializes an async-compatible checkpointer for non-blocking execution and astream support."""
     settings.ensure_directories()
-    try:
-        conn = sqlite3.connect(settings.CHECKPOINT_DB_PATH, check_same_thread=False)
-        return SqliteSaver(conn)
-    except Exception as exc:
-        logger.warning(
-            f"Failed to initialize SQLite checkpointer ({exc}). Falling back to in-memory checkpointer."
-        )
-        return MemorySaver()
+    # MemorySaver natively supports both synchronous invoke and asynchronous astream/ainvoke
+    return MemorySaver()
 
 
 def build_workflow():
