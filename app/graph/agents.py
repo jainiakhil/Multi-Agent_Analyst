@@ -4,9 +4,10 @@ Defines the multi-agent worker nodes with automated tool calling loops,
 dynamic LLM model resolution, and the Lead Supervisor with structured routing output.
 """
 
+import json
 import logging
 from typing import Optional
-from langchain_core.messages import SystemMessage, AIMessage, ToolMessage
+from langchain_core.messages import SystemMessage, AIMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 
 from app.core.config import settings
@@ -56,6 +57,14 @@ def supervisor_node(state: AgentState, config: Optional[RunnableConfig] = None) 
     Returns:
         Dictionary update with `next_node` set to 'code_analyst', 'doc_parser', or 'FINISH'.
     """
+    messages = list(state.get("messages", []))
+
+    # Loop prevention: if a worker has already provided an analysis report, complete the run
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage) and ("[Code Analyst]:" in msg.content or "[Doc Parser]:" in msg.content):
+            logger.info("Supervisor identified completed worker response. Finalizing execution with FINISH.")
+            return {"next_node": "FINISH"}
+
     system_prompt = SystemMessage(
         content=(
             "You are the Lead Analyst Supervisor directing an enterprise codebase audit.\n"
@@ -71,7 +80,6 @@ def supervisor_node(state: AgentState, config: Optional[RunnableConfig] = None) 
     custom_model = configurable.get("supervisor_model")
     custom_provider = configurable.get("provider")
 
-    # Resolve active router chain (custom override or default)
     if custom_model or custom_provider:
         active_llm = llm_factory.create_chat_model(
             model_name=custom_model,
@@ -83,13 +91,11 @@ def supervisor_node(state: AgentState, config: Optional[RunnableConfig] = None) 
         active_router = router_chain
 
     try:
-        messages = [system_prompt] + list(state["messages"])
-        decision = active_router.invoke(messages)
+        decision = active_router.invoke([system_prompt] + messages)
         logger.info(f"Supervisor routed to: {decision.next_node} (Reason: {decision.reasoning})")
         return {"next_node": decision.next_node}
     except Exception as exc:
         logger.error(f"Supervisor node execution failed: {exc}")
-        # Default safely to FINISH if unable to route
         return {"next_node": "FINISH"}
 
 
@@ -103,14 +109,6 @@ def code_analyst_node(state: AgentState, config: Optional[RunnableConfig] = None
     Returns:
         Dictionary update with an AIMessage from [Code Analyst].
     """
-    system_prompt = SystemMessage(
-        content=(
-            "You are a Senior Systems Architect and Code Auditor. Use the `parse_python_ast` tool "
-            "when file paths are supplied to inspect structural code layout before delivering analysis.\n"
-            "Provide detailed feedback on architecture, function signatures, syntax, potential bugs, and optimizations."
-        )
-    )
-
     configurable = (config or {}).get("configurable", {})
     custom_model = configurable.get("code_analyst_model") or configurable.get("code_model")
     custom_provider = configurable.get("provider")
@@ -125,32 +123,64 @@ def code_analyst_node(state: AgentState, config: Optional[RunnableConfig] = None
     else:
         active_agent = code_agent_with_tools
 
+    system_prompt = SystemMessage(
+        content=(
+            "You are a Senior Systems Architect and Code Auditor. Inspect structural code layout "
+            "and function signatures before delivering a comprehensive audit report.\n"
+            "Provide detailed feedback on architecture, function signatures, syntax, potential bugs, and optimizations."
+        )
+    )
+
     try:
         history = [system_prompt] + list(state["messages"])
-        response = active_agent.invoke(history)
+        target_file = state.get("target_file")
 
-        # Handle tool call execution loop if the model decided to inspect AST
+        # If a target file is explicitly provided in state, inject AST inspection proactively
+        if target_file:
+            ast_info = parse_python_ast.invoke({"file_path": target_file})
+            history.append(
+                HumanMessage(
+                    content=f"Context for audit: Local file AST inspection for '{target_file}':\n{ast_info}"
+                )
+            )
+
+        response = active_agent.invoke(history)
+        content = response.content
+
+        # Handle native tool call if emitted in response.tool_calls
         if response.tool_calls:
             tool_messages = []
             for tool_call in response.tool_calls:
                 tool_name = tool_call["name"]
                 tool_args = tool_call["args"]
                 tool_id = tool_call.get("id", "call_ast")
-                logger.info(f"Code Analyst invoking tool '{tool_name}' with args: {tool_args}")
-
                 tool_func = TOOL_MAP.get(tool_name)
-                if tool_func:
-                    tool_result = tool_func.invoke(tool_args)
-                else:
-                    tool_result = f"Error: Tool '{tool_name}' not recognized."
-
+                tool_result = tool_func.invoke(tool_args) if tool_func else f"Error: Tool '{tool_name}' not found."
                 tool_messages.append(ToolMessage(content=str(tool_result), tool_call_id=tool_id))
 
-            # Re-invoke model with tool execution results for final synthesis
             final_response = active_agent.invoke(history + [response] + tool_messages)
             content = final_response.content
-        else:
-            content = response.content
+
+        # Handle models that emit raw JSON tool call strings in response.content
+        elif content and content.strip().startswith("{") and content.strip().endswith("}"):
+            try:
+                parsed = json.loads(content.strip())
+                if "name" in parsed and ("arguments" in parsed or "parameters" in parsed or "args" in parsed):
+                    tool_name = parsed["name"]
+                    tool_args = parsed.get("arguments") or parsed.get("parameters") or parsed.get("args") or {}
+                    tool_func = TOOL_MAP.get(tool_name)
+                    if tool_func:
+                        tool_result = tool_func.invoke(tool_args)
+                        synthesis_prompt = HumanMessage(
+                            content=(
+                                f"AST Analysis results:\n{tool_result}\n\n"
+                                "Please deliver your full audit report and recommendations now based on these findings."
+                            )
+                        )
+                        final_response = active_agent.invoke(history + [response, synthesis_prompt])
+                        content = final_response.content
+            except (json.JSONDecodeError, Exception) as parse_err:
+                logger.debug(f"Content was not a JSON tool call: {parse_err}")
 
         return {"messages": [AIMessage(content=f"[Code Analyst]:\n{content}")]}
     except Exception as exc:
@@ -168,14 +198,6 @@ def doc_parser_node(state: AgentState, config: Optional[RunnableConfig] = None) 
     Returns:
         Dictionary update with an AIMessage from [Doc Parser].
     """
-    system_prompt = SystemMessage(
-        content=(
-            "You are a Technical Documentation Specialist. Use the `query_documentation` tool "
-            "to extract factual context from technical manuals, architecture specs, and documentation before responding.\n"
-            "Ground your answer strictly in retrieved excerpts whenever available."
-        )
-    )
-
     configurable = (config or {}).get("configurable", {})
     custom_model = configurable.get("doc_parser_model") or configurable.get("doc_model")
     custom_provider = configurable.get("provider")
@@ -190,32 +212,52 @@ def doc_parser_node(state: AgentState, config: Optional[RunnableConfig] = None) 
     else:
         active_agent = doc_agent_with_tools
 
+    system_prompt = SystemMessage(
+        content=(
+            "You are a Technical Documentation Specialist. Use technical documentation and specifications "
+            "to extract factual context before responding. Ground your answers strictly in retrieved excerpts."
+        )
+    )
+
     try:
         history = [system_prompt] + list(state["messages"])
         response = active_agent.invoke(history)
+        content = response.content
 
-        # Handle tool call execution loop if the model requested documentation retrieval
+        # Handle native tool call if emitted in response.tool_calls
         if response.tool_calls:
             tool_messages = []
             for tool_call in response.tool_calls:
                 tool_name = tool_call["name"]
                 tool_args = tool_call["args"]
                 tool_id = tool_call.get("id", "call_rag")
-                logger.info(f"Doc Parser invoking tool '{tool_name}' with args: {tool_args}")
-
                 tool_func = TOOL_MAP.get(tool_name)
-                if tool_func:
-                    tool_result = tool_func.invoke(tool_args)
-                else:
-                    tool_result = f"Error: Tool '{tool_name}' not recognized."
-
+                tool_result = tool_func.invoke(tool_args) if tool_func else f"Error: Tool '{tool_name}' not found."
                 tool_messages.append(ToolMessage(content=str(tool_result), tool_call_id=tool_id))
 
-            # Re-invoke model with retrieved excerpts for grounded answer
             final_response = active_agent.invoke(history + [response] + tool_messages)
             content = final_response.content
-        else:
-            content = response.content
+
+        # Handle models that emit raw JSON tool call strings in response.content
+        elif content and content.strip().startswith("{") and content.strip().endswith("}"):
+            try:
+                parsed = json.loads(content.strip())
+                if "name" in parsed and ("arguments" in parsed or "parameters" in parsed or "args" in parsed):
+                    tool_name = parsed["name"]
+                    tool_args = parsed.get("arguments") or parsed.get("parameters") or parsed.get("args") or {}
+                    tool_func = TOOL_MAP.get(tool_name)
+                    if tool_func:
+                        tool_result = tool_func.invoke(tool_args)
+                        synthesis_prompt = HumanMessage(
+                            content=(
+                                f"Retrieved Documentation Excerpts:\n{tool_result}\n\n"
+                                "Please provide your factual answer grounded in these excerpts."
+                            )
+                        )
+                        final_response = active_agent.invoke(history + [response, synthesis_prompt])
+                        content = final_response.content
+            except (json.JSONDecodeError, Exception) as parse_err:
+                logger.debug(f"Content was not a JSON tool call: {parse_err}")
 
         return {"messages": [AIMessage(content=f"[Doc Parser]:\n{content}")]}
     except Exception as exc:
