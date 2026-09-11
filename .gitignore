@@ -45,3 +45,7 @@ Thumbs.db
 build/
 dist/
 *.egg-info/
+
+# Planning files & office documents
+*.docx
+*.doc
