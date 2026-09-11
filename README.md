@@ -1,11 +1,17 @@
 # Multi-Agent Code & Document Analyst
 
+[![Project Status: Active Development](https://img.shields.io/badge/Status-In%20Active%20Development-blueviolet.svg)](https://github.com/jainiakhil/Multi-Agent_Analyst)
+[![Tests: 22/22 Passing](https://img.shields.io/badge/Tests-22%2F22%20Passing-success.svg)](https://github.com/jainiakhil/Multi-Agent_Analyst)
 [![Python Version](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![LangGraph](https://img.shields.io/badge/Orchestration-LangGraph-orange.svg)](https://github.com/langchain-ai/langgraph)
 [![FastAPI](https://img.shields.io/badge/Framework-FastAPI-green.svg)](https://fastapi.tiangolo.com/)
 [![ChromaDB](https://img.shields.io/badge/Vector%20Store-ChromaDB-purple.svg)](https://www.trychroma.com/)
 [![Ollama](https://img.shields.io/badge/Local%20LLMs-Ollama-black.svg)](https://ollama.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+> [!NOTE]
+> **🚀 Project Status: In Active Development & Portfolio Showcase**  
+> This project is currently under active development. The core architecture—including LangGraph supervisor multi-agent orchestration, Python AST static code auditing, local ChromaDB vector RAG retrieval, real-time WebSocket streaming, and dynamic model switching—is fully implemented, verified, and test-covered (**22/22 tests passing**). New features, additional language parsers, and a dedicated UI dashboard are actively being built.
 
 An enterprise-grade, stateful multi-agent system designed for automated code audits and technical documentation analysis. Built with **LangGraph**, **Ollama**, **ChromaDB**, **SQLite**, and **FastAPI**, it orchestrates specialized local AI models to inspect code structural layouts via Abstract Syntax Trees (AST) and query indexed technical documents via vector RAG.
 
@@ -170,14 +176,29 @@ DEBUG=False
 
 ### 5. Launch the API Service
 
-Start the FastAPI application using Uvicorn:
+Start the FastAPI application using the provided launcher scripts or Uvicorn:
 
+**On Windows**:
+```powershell
+# PowerShell:
+.\run.ps1
+
+# Or double-click / run in Command Prompt:
+run.bat
+```
+
+**Cross-Platform (Linux / macOS / Windows)**:
 ```bash
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 Interactive OpenAPI Swagger documentation will be available at:
 `http://localhost:8000/docs`
+
+You can also run the real-time interactive streaming client to test the full agent flow:
+```bash
+python client_example.py
+```
 
 ---
 
@@ -380,6 +401,22 @@ pytest -v tests/test_graph.py
 pytest -v tests/test_vector_store.py
 pytest -v tests/test_api.py
 ```
+
+---
+
+## 🗺️ Project Roadmap & Upcoming Milestones
+
+This repository is maintained and evolving. Key milestones and upcoming enhancements include:
+- [x] **LangGraph Stateful Supervisor Flow**: Dynamic routing with cyclic worker loops.
+- [x] **Python AST Static Inspection**: Structural blueprint analysis (classes, functions, signatures).
+- [x] **Local Vector RAG Retrieval**: Local ChromaDB persistence with PDF and Markdown ingestion.
+- [x] **Real-Time Streaming WebSocket & REST**: Live token and event streaming to clients.
+- [x] **Dynamic Multi-Provider LLM Factory**: Hot-swapping between Ollama models and OpenAI-compatible providers.
+- [x] **Comprehensive Test Coverage**: 22/22 automated unit and integration tests passing.
+- [ ] **Multi-Language AST Parsers**: Support for JavaScript/TypeScript, Go, and Rust codebase audits.
+- [ ] **Interactive Web UI**: Modern Next.js / React dashboard for visual graph execution.
+- [ ] **CI/CD & GitHub PR Bot**: Automated GitHub Action to audit Pull Requests and post AST reviews.
+- [ ] **Hybrid Search / Re-ranking**: Upgrading Chroma vector search with BM25 keyword re-ranking.
 
 ---
 
